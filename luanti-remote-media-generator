@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+
+import argparse
+import hashlib
+import logging
+from pathlib import Path
+import shutil
+import tempfile
+
+PROGRAM_NAME = "luanti-remote-media-generator"
+
+LOGGER = logging.getLogger(PROGRAM_NAME)
+
+LOG_LEVELS = [
+    logging.getLevelName(log_level).lower()
+    for log_level in (
+        logging.CRITICAL,
+        logging.ERROR,
+        logging.WARNING,
+        logging.INFO,
+        logging.DEBUG,
+    )
+]
+
+CHUNK_SIZE = 8192
+
+EXTENSIONS = [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".ogg",
+    ".x",
+    ".b3d",
+]
+
+MTH_FILENAME = "index.mth"
+MTH_HEADER = bytearray(b"MTHS\x00\x01")
+
+
+def parser():
+    parser = argparse.ArgumentParser(
+        "Script for generating a content-addressed store for Luanti remote media servers",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "mod_dir",
+        type=Path,
+        nargs="*",
+        default=[Path.cwd() / "mods"],
+        help="Mod directory",
+    )
+    parser.add_argument(
+        "--output-dir",
+        metavar="OUTPUT_DIR",
+        type=Path,
+        default=Path.cwd() / "media",
+        help="Output directory",
+    )
+    parser.add_argument(
+        "--work-dir",
+        metavar="WORK_DIR",
+        type=Path,
+        default=Path.cwd(),
+        help="Directory where temporary files will be created",
+    )
+    parser.add_argument(
+        "--hardlink-files",
+        action="store_true",
+        help="Hardlink files (slightly faster, but should be avoided if target files might change and therefore create checksum mismatches)",
+    )
+    parser.add_argument(
+        "--log-level",
+        required=False,
+        choices=LOG_LEVELS,
+        default=LOG_LEVELS[2],
+        type=str,
+        help="Set log level",
+    )
+    return parser
+
+
+def link_mode(src_dir, dst_dir, hardlink=False):
+    if hardlink:
+        if src_dir.stat().st_dev == dst_dir.stat().st_dev:
+            LOGGER.info("Enabling hardlinking")
+            return lambda src, dst: dst.hardlink_to(src)
+        else:
+            LOGGER.warning(
+                "Could not enable hardlinking due to cross-device link issues. Falling back to file copying."
+            )
+
+    return lambda src, dst: shutil.copyfile(src, dst)
+
+
+def main():
+    args = parser().parse_args()
+
+    logging.basicConfig(format="%(name)s.%(funcName)s %(message)s", level=args.log_level.upper())
+
+    checksums = []
+
+    with tempfile.TemporaryDirectory(prefix=f"{args.output_dir.name}.", dir=args.work_dir) as t:
+        temp_dir = Path(t)
+        link = link_mode(temp_dir, args.output_dir, args.hardlink_files)
+        for directory in args.mod_dir:
+            for file in [f for f in directory.rglob("*") if f.is_file() and f.suffix in EXTENSIONS]:
+                with open(file, "rb") as f:
+                    sha1_hash = hashlib.sha1()
+                    while True:
+                        chunk = f.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        sha1_hash.update(chunk)
+
+                digest, hexdigest = sha1_hash.digest(), sha1_hash.hexdigest()
+                if digest not in checksums:
+                    LOGGER.info(f"NEW FILE - Checksum: {hexdigest}, source file: {file.relative_to(Path.cwd())}")
+                    checksums.append(digest)
+                    link(file, temp_dir / hexdigest)
+                else:
+                    LOGGER.info(f"DUPLICATE - Checksum: {hexdigest}, source file: {file.relative_to(Path.cwd())}")
+
+        if len(checksums) > 0:
+            with open(temp_dir / MTH_FILENAME, "wb") as outfile:
+                outfile.write(MTH_HEADER + b"".join(sorted(checksums)))
+
+            if args.output_dir.is_dir():
+                try:
+                    shutil.rmtree(args.output_dir)
+                except Exception as err:
+                    LOGGER.error(f"Could not delete dest directory: {err}")
+
+            try:
+                temp_dir.rename(args.output_dir)
+            except Exception:
+                LOGGING.error("Could not rename directory: {arg.output_dir}")
+                args.output_dir.mkdir(exist_ok=True)
+                for file in temp_dir.iterdir():
+                    try:
+                        file.rename(file, args.output_dir / file.name)
+                    except Exception:
+                        shutil.copyfile(file, args.output_dir / file.name)
+
+
+if __name__ == "__main__":
+    main()
