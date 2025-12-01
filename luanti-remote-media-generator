@@ -4,12 +4,15 @@ import argparse
 import hashlib
 import logging
 from pathlib import Path
+import re
 import shutil
 import tempfile
 
 PROGRAM_NAME = "luanti-remote-media-generator"
 
 LOGGER = logging.getLogger(PROGRAM_NAME)
+
+METADATA_EXPRESSION = r"^.*(LEGAL|legal|license|LICENSE|readme|README).*$"
 
 LOG_LEVELS = [
     logging.getLevelName(log_level).lower()
@@ -76,6 +79,12 @@ def parser():
         type=str,
         help="Set log level",
     )
+    parser.add_argument(
+        "--add-metadata",
+        required=False,
+        action="store_true",
+        help="Add metadata files (e.g., licenses and READMEs) if present",
+    )
     return parser
 
 
@@ -115,6 +124,29 @@ def main():
                 digest, hexdigest = sha1_hash.digest(), sha1_hash.hexdigest()
                 if digest not in checksums:
                     LOGGER.info(f"NEW FILE - Checksum: {hexdigest}, source file: {file}")
+                    if args.add_metadata:
+                        if file.parent == directory:
+                            matches = [i for i in f.iterdir() if i.is_file() and re.search(METADATA_EXPRESSION, i.name)]
+                        else:
+                            f = file.parent
+                            while f != directory:
+                                matches = [
+                                    i for i in f.iterdir() if i.is_file() and re.search(METADATA_EXPRESSION, i.name)
+                                ]
+
+                                if len(matches) == 0:
+                                    f = f.parent
+                                    LOGGER.debug(f"Going up directory: {f}")
+                                else:
+                                    break
+
+                        if matches:
+                            for metadata_file in matches:
+                                LOGGER.info(f"Adding metadata file: {metadata_file}")
+                                link(metadata_file, temp_dir / f"{hexdigest}.{metadata_file.name}")
+                        else:
+                            LOGGER.warning(f"Could not find license for: {file}")
+
                     checksums.append(digest)
                     link(file, temp_dir / hexdigest)
                 else:
