@@ -36,6 +36,8 @@ EXTENSIONS = [
     ".b3d",
 ]
 
+MOD_SUBDIRS = ["mods", "textures"]
+
 MTH_FILENAME = "index.mth"
 MTH_HEADER = bytearray(b"MTHS\x00\x01")
 
@@ -48,8 +50,6 @@ def parser():
     parser.add_argument(
         "mod_dir",
         type=Path,
-        nargs="*",
-        default=[Path.cwd() / "mods"],
         help="Mod directory",
     )
     parser.add_argument(
@@ -83,8 +83,16 @@ def parser():
         "--add-metadata",
         required=False,
         action="store_true",
-        help="Add metadata files (e.g., licenses and READMEs) if present",
+        help="Add metadata files (e.g., licenses and READMEs)",
     )
+    parser.add_argument(
+        "--default-metadata-files",
+        type=Path,
+        required=False,
+        nargs="*",
+        help="Default metadata file(s) in case none are detected",
+    )
+
     return parser
 
 
@@ -111,7 +119,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix=f"{args.output_dir.name}.", dir=args.work_dir) as t:
         temp_dir = Path(t)
         link = link_mode(temp_dir, args.output_dir, args.hardlink_files)
-        for directory in args.mod_dir:
+        for directory in [d for d in args.mod_dir.iterdir() if d.is_dir() and d.name in MOD_SUBDIRS]:
             for file in [f for f in directory.rglob("*") if f.is_file() and f.suffix in EXTENSIONS]:
                 with open(file, "rb") as f:
                     sha1_hash = hashlib.sha1()
@@ -125,27 +133,26 @@ def main():
                 if digest not in checksums:
                     LOGGER.info(f"NEW FILE - Checksum: {hexdigest}, source file: {file}")
                     if args.add_metadata:
-                        if file.parent == directory:
-                            matches = [i for i in f.iterdir() if i.is_file() and re.search(METADATA_EXPRESSION, i.name)]
-                        else:
-                            f = file.parent
-                            while f != directory:
-                                matches = [
-                                    i for i in f.iterdir() if i.is_file() and re.search(METADATA_EXPRESSION, i.name)
-                                ]
+                        d = file.parent
+                        while d != args.mod_dir:
+                            matches = [f for f in d.iterdir() if f.is_file() and re.search(METADATA_EXPRESSION, f.name)]
 
-                                if len(matches) == 0:
-                                    f = f.parent
-                                    LOGGER.debug(f"Going up directory: {f}")
-                                else:
-                                    break
+                            if len(matches) == 0:
+                                d = d.parent
+                                LOGGER.debug(f"Going up directory: {d}")
+                            else:
+                                break
 
-                        if matches:
-                            for metadata_file in matches:
-                                LOGGER.info(f"Adding metadata file: {metadata_file}")
-                                link(metadata_file, temp_dir / f"{hexdigest}.{metadata_file.name}")
-                        else:
-                            LOGGER.warning(f"Could not find license for: {file}")
+                        if not matches:
+                            if args.default_metadata_files:
+                                LOGGER.info(f"Falling back to default metadata file(s) for {file}")
+                                matches = args.default_metadata_files
+                            else:
+                                LOGGER.warn(f"Could not find metadata for {file}")
+
+                        for metadata_file in matches:
+                            LOGGER.info(f"Adding metadata file: {metadata_file} -> {hexdigest}.{metadata_file.name}")
+                            link(metadata_file, temp_dir / f"{hexdigest}.{metadata_file.name}")
 
                     checksums.append(digest)
                     link(file, temp_dir / hexdigest)
