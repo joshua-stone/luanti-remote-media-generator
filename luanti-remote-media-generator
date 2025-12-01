@@ -114,11 +114,11 @@ def main():
 
                 digest, hexdigest = sha1_hash.digest(), sha1_hash.hexdigest()
                 if digest not in checksums:
-                    LOGGER.info(f"NEW FILE - Checksum: {hexdigest}, source file: {file.relative_to(Path.cwd())}")
+                    LOGGER.info(f"NEW FILE - Checksum: {hexdigest}, source file: {file}")
                     checksums.append(digest)
                     link(file, temp_dir / hexdigest)
                 else:
-                    LOGGER.info(f"DUPLICATE - Checksum: {hexdigest}, source file: {file.relative_to(Path.cwd())}")
+                    LOGGER.info(f"DUPLICATE - Checksum: {hexdigest}, source file: {file}")
 
         if len(checksums) > 0:
             with open(temp_dir / MTH_FILENAME, "wb") as outfile:
@@ -133,7 +133,7 @@ def main():
             try:
                 temp_dir.rename(args.output_dir)
             except Exception:
-                LOGGING.error("Could not rename directory: {arg.output_dir}")
+                LOGGER.error("Could not rename directory: {arg.output_dir}")
                 args.output_dir.mkdir(exist_ok=True)
                 for file in temp_dir.iterdir():
                     try:
